@@ -351,6 +351,15 @@ const recoveryHeartbeatInterval = 3 * time.Minute
 // - Agents with work-on-hook not progressing (GUPP violation)
 // - Orphaned work (assigned to dead agents)
 func (d *Daemon) heartbeat(state *State) {
+	// Recover from panics in heartbeat to prevent daemon crash.
+	// Individual heartbeat operations (deacon, witness, refinery, etc.) may
+	// trigger panics in external libraries (e.g., Dolt). The daemon must survive.
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Printf("PANIC in heartbeat (recovered): %v", r)
+		}
+	}()
+
 	// Skip heartbeat if shutdown is in progress.
 	// This prevents the daemon from fighting shutdown by auto-restarting killed agents.
 	// The shutdown.lock file is created by gt down before terminating sessions.
@@ -911,6 +920,19 @@ func (d *Daemon) killRefinerySessions() {
 	}
 }
 
+// safeOpenBeadsStore wraps beadsdk.Open with panic recovery.
+// The Dolt embedded driver can panic with nil pointer dereference when the
+// underlying DoltDB fails to initialize (e.g., SetCrashOnFatalError on nil).
+// This converts such panics into errors so the daemon survives.
+func safeOpenBeadsStore(ctx context.Context, beadsDir string) (store beadsdk.Storage, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic opening beads store at %s: %v", beadsDir, r)
+		}
+	}()
+	return beadsdk.Open(ctx, beadsDir)
+}
+
 // openBeadsStores opens beads stores for the town (hq) and all known rigs.
 // Returns a map keyed by "hq" for town-level and rig names for per-rig stores.
 // Stores that fail to open are logged and skipped.
@@ -919,7 +941,7 @@ func (d *Daemon) openBeadsStores() map[string]beadsdk.Storage {
 
 	// Town-level store (hq)
 	hqBeadsDir := filepath.Join(d.config.TownRoot, ".beads")
-	if store, err := beadsdk.Open(d.ctx, hqBeadsDir); err == nil {
+	if store, err := safeOpenBeadsStore(d.ctx, hqBeadsDir); err == nil {
 		stores["hq"] = store
 	} else {
 		d.logger.Printf("Convoy: hq beads store unavailable: %s", util.FirstLine(err.Error()))
@@ -931,7 +953,7 @@ func (d *Daemon) openBeadsStores() map[string]beadsdk.Storage {
 		if beadsDir == "" {
 			continue
 		}
-		store, err := beadsdk.Open(d.ctx, beadsDir)
+		store, err := safeOpenBeadsStore(d.ctx, beadsDir)
 		if err != nil {
 			d.logger.Printf("Convoy: %s beads store unavailable: %s", rigName, util.FirstLine(err.Error()))
 			continue
