@@ -117,21 +117,23 @@ needs = ["determine-scope"]
 description = """
 Find molecules attached to dead sessions.
 
-**1. List active molecules:**
+**1. List in-progress molecules:**
 ```bash
-bd mol list --active
+bd list -t mol --status=in_progress
 ```
+
+Note: `bd mol list` does not exist. Use `bd list -t mol` to filter by type.
 
 **2. For each molecule, check owner session:**
 ```bash
-bd mol show <mol-id>
-# Get agent/session info
+bd show <mol-id>
+# Get assignee field
 ```
 
 **3. Check if owner session exists:**
 
-Parse the owner/agent field to extract rig and name:
-- Owner format: `<rig>/polecats/<name>` or `<rig>/<role>`
+Parse the assignee field to extract rig and name:
+- Assignee format: `<rig>/polecats/<name>` or `<rig>/<role>`
 
 ```bash
 # Check session liveness using gt session status (handles prefix derivation)
@@ -151,24 +153,36 @@ id = "scan-orphaned-wisps"
 title = "Scan for orphaned wisps"
 needs = ["determine-scope"]
 description = """
-Find wisps from terminated sessions.
+Find wisps from terminated sessions that are still in_progress (not completed).
 
-**1. List wisps in ephemeral storage:**
+IMPORTANT: There can be thousands of completed wisps — do NOT iterate all wisps.
+Only check wisps that are still in_progress or open (not completed/closed).
+
+**1. List only in-progress/open wisps:**
 ```bash
-ls .beads-wisp/             # Or equivalent location
+bd list -t wisp --status=in_progress
 ```
 
-**2. For each wisp, check spawner session:**
-Wisps should have metadata indicating the spawning session.
+If output is empty, there are no orphaned wisps. Skip to exit criteria.
+
+**2. For each in-progress wisp, check spawner session:**
+```bash
+bd show <wisp-id>
+# Get assignee/owner field
+```
+
+Parse the owner field to extract rig and name.
+
+```bash
+gt session status <rig>/<name> --json | jq -r '.running' | grep -q true && echo ALIVE || echo DEAD
+```
 
 **3. Identify orphans:**
-- Wisp age > 1 hour + spawner session dead = orphan
-- Wisp with no spawner metadata = orphan
+- Wisp in_progress + owner session dead = orphan
+- Wisp in_progress + no owner = orphan
+- Completed wisps are NOT orphans — skip them entirely
 
-**4. Check for unsquashed content:**
-Orphaned wisps may have audit-worthy content that wasn't squashed.
-
-**Exit criteria:** Orphaned wisps identified."""
+**Exit criteria:** Orphaned in-progress wisps identified (usually none)."""
 
 [[steps]]
 id = "triage-orphans"
